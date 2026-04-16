@@ -114,16 +114,22 @@ if st.session_state.user is None:
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-     if st.button("🔐 Login with Google", use_container_width=True, type="primary"):
-    try:
-        supabase = get_supabase()
-        app_url = "https://cv-screener-pro.streamlit.app"
-        res = supabase.auth.sign_in_with_oauth({
-            "provider": "google",
-            "options": {
-                "redirect_to": app_url,
-                "scopes": "email profile",
-                "query_params": {"access_type": "offline", "prompt": "consent"}
+        if st.button("🔐 Login with Google", use_container_width=True, type="primary"):
+            try:
+                supabase = get_supabase()
+                app_url = "https://cv-screener-pro.streamlit.app"
+                res = supabase.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": {
+                        "redirect_to": app_url,
+                        "scopes": "email profile",
+                        "query_params": {"access_type": "offline", "prompt": "consent"}
+                    }
+                })
+                auth_url = res.url
+                st.markdown(f'### [👉 Click here to Login with Google]({auth_url})')
+            except Exception as e:
+                st.error(f"Error: {e}")
             }
         })
         auth_url = res.url
