@@ -120,7 +120,7 @@ if st.session_state.user is None:
                 app_url = "https://cv-screener-pro.streamlit.app"
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {"redirect_to": app_url, "scopes": "email profile"}
+                    "options": {"redirect_to": app_url, "scopes": "email profile", "flow_type": "implicit"}
                 })
                 st.write(res)
             except Exception as e:
