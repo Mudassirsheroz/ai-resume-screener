@@ -122,25 +122,20 @@ if st.session_state.user is None:
                     "provider": "google",
                     "options": {
                         "redirect_to": app_url,
-                        "scopes": "email profile",
-                        "query_params": {"access_type": "offline", "prompt": "consent"}
+                        "scopes": "email profile"
                     }
                 })
-                auth_url = res.url
-                st.markdown(f'### [👉 Click here to Login with Google]({auth_url})')
+                if res and res.url:
+                    st.markdown(f'### [👉 Click here to Login with Google]({res.url})')
+                else:
+                    st.error("Login URL nahi mili, dobara try karo.")
             except Exception as e:
                 st.error(f"Error: {e}")
-            }
-        })
-        auth_url = res.url
-        st.markdown(f'### [👉 Click here to Login with Google]({auth_url})')
-    except Exception as e:
-        st.error(f"Error: {e}")    
 
 # ── Main App ──────────────────────────────────────────
 else:
     user = st.session_state.user
-    
+
     # Header
     col_title, col_user = st.columns([3, 1])
     with col_title:
