@@ -117,7 +117,7 @@ if st.session_state.user is None:
         if st.button("🔐 Login with Google", use_container_width=True, type="primary"):
             try:
                 supabase = get_supabase()
-            app_url = "https://cv-screener-pro.streamlit.app"
+                app_url = "https://cv-screener-pro.streamlit.app"
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
                     "options": {"redirect_to": app_url}
