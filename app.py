@@ -68,39 +68,6 @@ Respond ONLY in this exact JSON format, no extra text:
     raw = raw.replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
 
-# ── Save to Supabase ──────────────────────────────────
-def save_screening(user, jd_text, result):
-    try:
-        supabase = get_supabase()
-        supabase.table("screenings").insert({
-            "user_id": user.id,
-            "user_email": user.email,
-            "job_description": jd_text[:500],
-            "candidate_name": result["name"],
-            "score": result["score"],
-            "verdict": result["verdict"],
-            "strengths": result["strengths"],
-            "weaknesses": result["weaknesses"],
-            "summary": result["summary"],
-            "interview_questions": result["interview_questions"]
-        }).execute()
-    except Exception as e:
-        st.warning(f"History save nahi hui: {e}")
-
-# ── Load History ──────────────────────────────────────
-def load_history(user):
-    try:
-        supabase = get_supabase()
-        res = supabase.table("screenings")\
-            .select("*")\
-            .eq("user_id", user.id)\
-            .order("created_at", desc=True)\
-            .limit(20)\
-            .execute()
-        return res.data
-    except:
-        return []
-
 # ── UI Setup ──────────────────────────────────────────
 st.set_page_config(page_title="AI Resume Screener Pro", page_icon="🧠", layout="wide")
 
@@ -149,24 +116,19 @@ if st.session_state.user is None:
         if st.button("🔐 Login with Google", use_container_width=True, type="primary"):
             try:
                 supabase = get_supabase()
-                app_url = "https://cv-screener-pro.streamlit.app"
+                app_url = "https://ai-resume-screener-pro.streamlit.app"
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {
-                        "redirect_to": app_url,
-                        "scopes": "email profile"
-                    }
+                    "options": {"redirect_to": app_url}
                 })
-                if res and res.url:
-                    st.markdown(f'### [👉 Click here to Login with Google]({res.url})')
-                else:
-                    st.error("Login URL nahi mili, dobara try karo.")
+                st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Error: {e}")
 
 # ── Main App ──────────────────────────────────────────
 else:
     user = st.session_state.user
+    supabase = get_supabase()
 
     # Header
     col_title, col_user = st.columns([3, 1])
@@ -180,16 +142,36 @@ else:
             st.rerun()
 
     # ── Tabs ──────────────────────────────────────────
-    tab1, tab2 = st.tabs(["🚀 New Screening", "📋 History"])
+    tab1, tab2, tab3 = st.tabs(["🚀 New Screening", "📋 History", "💼 Saved JDs"])
 
-    # ── Tab 1: New Screening ──────────────────────────
+    # ══════════════════════════════════════════════════
+    # TAB 1 — New Screening
+    # ══════════════════════════════════════════════════
     with tab1:
         col1, col2 = st.columns([1, 1], gap="large")
 
         with col1:
             st.subheader("📋 Job Description")
-            jd_text = st.text_area("JD paste karo", height=300,
-                placeholder="e.g. Python developer needed with Django, REST APIs, 3+ years exp...")
+
+            # Saved JDs dropdown
+            try:
+                saved = supabase.table("saved_jds").select("*").eq("user_email", user.email).execute()
+                saved_list = saved.data if saved.data else []
+            except:
+                saved_list = []
+
+            if saved_list:
+                jd_options = ["-- Naya likho --"] + [j["title"] for j in saved_list]
+                selected_jd = st.selectbox("Saved JD select karo", jd_options)
+                if selected_jd != "-- Naya likho --":
+                    jd_text = next(j["description"] for j in saved_list if j["title"] == selected_jd)
+                    st.text_area("JD", value=jd_text, height=250, key="jd_display")
+                else:
+                    jd_text = st.text_area("JD paste karo", height=250,
+                        placeholder="e.g. Python developer needed with Django, REST APIs...")
+            else:
+                jd_text = st.text_area("JD paste karo", height=250,
+                    placeholder="e.g. Python developer needed with Django, REST APIs...")
 
         with col2:
             st.subheader("📁 CVs Upload Karo")
@@ -223,7 +205,21 @@ else:
                         result = analyze_with_groq(cv_text, jd_text, name)
                         result["name"] = name
                         results.append(result)
-                        save_screening(user, jd_text, result)
+
+                        # Save to Supabase
+                        supabase.table("screenings").insert({
+                            "user_id": user.id,
+                            "user_email": user.email,
+                            "job_description": jd_text[:500],
+                            "candidate_name": name,
+                            "score": result["score"],
+                            "verdict": result["verdict"],
+                            "strengths": result["strengths"],
+                            "weaknesses": result["weaknesses"],
+                            "summary": result["summary"],
+                            "interview_questions": result["interview_questions"]
+                        }).execute()
+
                     except Exception as e:
                         st.error(f"❌ Error — {uploaded.name}: {e}")
 
@@ -260,7 +256,6 @@ else:
 
                 st.divider()
                 st.subheader("📋 Detailed Analysis")
-
                 for i, res in enumerate(results):
                     medal = "🥇" if i==0 else ("🥈" if i==1 else ("🥉" if i==2 else "📄"))
                     with st.expander(f"{medal} #{i+1} — {res['name']} ({res['score']}% — {res['verdict']})"):
@@ -298,28 +293,75 @@ else:
                     use_container_width=True
                 )
 
-    # ── Tab 2: History ────────────────────────────────
+    # ══════════════════════════════════════════════════
+    # TAB 2 — History
+    # ══════════════════════════════════════════════════
     with tab2:
-        st.subheader("📋 Teri Screening History")
-        history = load_history(user)
+        st.subheader("📋 Screening History")
+        try:
+            history = supabase.table("screenings").select("*").eq("user_email", user.email).order("created_at", desc=True).execute()
+            if history.data:
+                for record in history.data:
+                    verdict = record["verdict"]
+                    css = "suitable" if verdict == "SUITABLE" else ("maybe" if verdict == "MAYBE" else "nofit")
+                    with st.expander(f"📄 {record['candidate_name']} — {record['score']}% — {verdict} | {record['created_at'][:10]}"):
+                        st.markdown(f"**JD:** {record['job_description'][:200]}...")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.markdown("**✅ Strengths**")
+                            for s in record["strengths"]:
+                                st.markdown(f"- {s}")
+                        with c2:
+                            st.markdown("**❌ Weaknesses**")
+                            for w in record["weaknesses"]:
+                                st.markdown(f"- {w}")
+                        st.info(record["summary"])
+            else:
+                st.info("Abhi koi screening nahi — pehli CV analyze karo!")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-        if not history:
-            st.info("Abhi koi screening nahi ki — pehle CVs analyze karo!")
-        else:
-            st.success(f"✅ Total {len(history)} screenings mili!")
-            for h in history:
-                verdict = h["verdict"]
-                medal = "🥇" if h["score"] >= 70 else ("⚠️" if h["score"] >= 40 else "❌")
-                with st.expander(f"{medal} {h['candidate_name']} — {h['score']}% — {verdict} | {h['created_at'][:10]}"):
-                    st.markdown(f"**📋 JD:** {h['job_description'][:200]}...")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown("**✅ Strengths**")
-                        for s in h["strengths"]:
-                            st.markdown(f"- {s}")
-                    with c2:
-                        st.markdown("**❌ Weaknesses**")
-                        for w in h["weaknesses"]:
-                            st.markdown(f"- {w}")
-                    st.markdown("**📝 Summary**")
-                    st.info(h["summary"])
+    # ══════════════════════════════════════════════════
+    # TAB 3 — Saved JDs
+    # ══════════════════════════════════════════════════
+    with tab3:
+        st.subheader("💼 Saved Job Descriptions")
+
+        # Save new JD
+        with st.expander("➕ Naya JD Save Karo"):
+            jd_title = st.text_input("JD Title", placeholder="e.g. Python Developer, Data Analyst...")
+            jd_desc = st.text_area("Job Description", height=200,
+                placeholder="Poori job description paste karo...")
+            if st.button("💾 Save JD", type="primary"):
+                if jd_title.strip() and jd_desc.strip():
+                    try:
+                        supabase.table("saved_jds").insert({
+                            "user_id": user.id,
+                            "user_email": user.email,
+                            "title": jd_title,
+                            "description": jd_desc
+                        }).execute()
+                        st.success(f"✅ '{jd_title}' save ho gaya!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.warning("Title aur Description dono daalo!")
+
+        st.divider()
+
+        # Show saved JDs
+        try:
+            saved = supabase.table("saved_jds").select("*").eq("user_email", user.email).order("created_at", desc=True).execute()
+            if saved.data:
+                for jd in saved.data:
+                    with st.expander(f"💼 {jd['title']} — {jd['created_at'][:10]}"):
+                        st.text_area("JD Content", value=jd["description"], height=150, key=f"jd_{jd['id']}")
+                        if st.button(f"🗑️ Delete", key=f"del_{jd['id']}"):
+                            supabase.table("saved_jds").delete().eq("id", jd["id"]).execute()
+                            st.success("Deleted!")
+                            st.rerun()
+            else:
+                st.info("Koi JD save nahi — upar se add karo!")
+        except Exception as e:
+            st.error(f"Error: {e}")
