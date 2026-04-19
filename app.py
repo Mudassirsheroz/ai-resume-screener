@@ -102,6 +102,7 @@ if st.session_state.user is None:
         pass
 
 # ── Login Page ────────────────────────────────────────
+# ── Email/Password Login ──────────────────────────────
 if st.session_state.user is None:
     st.markdown("""
     <div class="login-box">
@@ -113,17 +114,38 @@ if st.session_state.user is None:
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("🔐 Login with Google", use_container_width=True, type="primary"):
-            try:
-                supabase = get_supabase()
-                app_url = "https://cv-screener-pro.streamlit.app"
-                res = supabase.auth.sign_in_with_oauth({
-                    "provider": "google",
-                    "options": {"redirect_to": app_url}
-                })
-                st.markdown(f'<meta http-equiv="refresh" content="0;url={res.url}">', unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Error: {e}")
+        tab_login, tab_register = st.tabs(["🔐 Login", "📝 Register"])
+        
+        with tab_login:
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Login", use_container_width=True, type="primary"):
+                try:
+                    supabase = get_supabase()
+                    res = supabase.auth.sign_in_with_password({
+                        "email": email,
+                        "password": password
+                    })
+                    st.session_state.user = res.user
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Login failed: {e}")
+
+        with tab_register:
+            reg_email = st.text_input("Email", key="reg_email")
+            reg_password = st.text_input("Password", type="password", key="reg_pass")
+            if st.button("Register", use_container_width=True, type="primary"):
+                try:
+                    supabase = get_supabase()
+                    res = supabase.auth.sign_up({
+                        "email": reg_email,
+                        "password": reg_password
+                    })
+                    st.success("✅ Account ban gaya! Ab login karo.")
+                except Exception as e:
+                    st.error(f"❌ Register failed: {e}")
+
+    
 
 # ── Main App ──────────────────────────────────────────
 else:
