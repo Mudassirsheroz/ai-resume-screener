@@ -73,21 +73,89 @@ st.set_page_config(page_title="AI Resume Screener Pro", page_icon="🧠", layout
 
 st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+* { font-family: 'Inter', sans-serif; }
+
 .big-title { font-size: 2rem; font-weight: 700; margin-bottom: 0.2rem; }
 .subtitle  { color: #888; margin-bottom: 1.5rem; font-size: 1rem; }
+
 .score-card { padding: 1.2rem; border-radius: 12px; text-align: center; margin-bottom: 0.5rem; }
 .suitable  { background: #d4edda; border: 2px solid #28a745; }
 .maybe     { background: #fff3cd; border: 2px solid #ffc107; }
 .nofit     { background: #f8d7da; border: 2px solid #dc3545; }
-.login-box { max-width: 400px; margin: 5rem auto; text-align: center; padding: 2rem;
-             border-radius: 16px; border: 1px solid #e0e0e0; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+
+.login-container {
+    max-width: 420px;
+    margin: 3rem auto;
+    padding: 2.5rem;
+    border-radius: 20px;
+    border: 1px solid #e8e8e8;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.10);
+    background: white;
+    text-align: center;
+}
+
+.login-logo { font-size: 3.5rem; margin-bottom: 0.5rem; }
+.login-title { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.3rem; color: #1a1a1a; }
+.login-subtitle { color: #888; margin-bottom: 2rem; font-size: 0.95rem; }
+
+.google-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: white;
+    border: 1.5px solid #dadce0;
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #3c4043;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.2s;
+    text-decoration: none;
+    margin-bottom: 1rem;
+}
+.google-btn:hover {
+    background: #f8f9fa;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    border-color: #c0c0c0;
+}
+
+.divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 1.2rem 0;
+    color: #aaa;
+    font-size: 0.85rem;
+}
+.divider::before, .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e8e8e8;
+}
+
+.user-badge {
+    background: #f0f4ff;
+    border: 1px solid #d0dbff;
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    color: #3d5afe;
+    font-weight: 500;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Google Login ──────────────────────────────────────
+# ── Session State Init ────────────────────────────────
 if "user" not in st.session_state:
     st.session_state.user = None
 
+# ── Handle OAuth Callback ─────────────────────────────
 if st.session_state.user is None:
     try:
         supabase = get_supabase()
@@ -98,54 +166,121 @@ if st.session_state.user is None:
             st.session_state.user = res.user
             st.query_params.clear()
             st.rerun()
-    except:
+    except Exception as e:
         pass
 
 # ── Login Page ────────────────────────────────────────
-# ── Email/Password Login ──────────────────────────────
 if st.session_state.user is None:
-    st.markdown("""
-    <div class="login-box">
-        <div style="font-size:3rem">🧠</div>
-        <div style="font-size:1.8rem;font-weight:700;margin:0.5rem 0">AI Resume Screener Pro</div>
-        <div style="color:#888;margin-bottom:1.5rem">Login karo aur CVs analyze karo</div>
-    </div>
-    """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # Get the app URL for Google OAuth redirect
+    app_url = os.environ.get("APP_URL", "http://localhost:8501")
+
+    col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
+        st.markdown("""
+        <div class="login-container">
+            <div class="login-logo">🧠</div>
+            <div class="login-title">AI Resume Screener Pro</div>
+            <div class="login-subtitle">Login karo aur CVs analyze karo</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Google Login Button ──
+        try:
+            supabase = get_supabase()
+            google_url = supabase.auth.sign_in_with_oauth({
+                "provider": "google",
+                "options": {
+                    "redirect_to": app_url
+                }
+            })
+            st.markdown(f"""
+            <a href="{google_url.url}" class="google-btn">
+                <svg width="18" height="18" viewBox="0 0 48 48">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                </svg>
+                Google se Login Karo
+            </a>
+            """, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Google login setup error: {e}")
+
+        st.markdown('<div class="divider">ya email se</div>', unsafe_allow_html=True)
+
+        # ── Email/Password Tabs ──
         tab_login, tab_register = st.tabs(["🔐 Login", "📝 Register"])
-        
+
         with tab_login:
-            email = st.text_input("Email", key="login_email")
-            password = st.text_input("Password", type="password", key="login_pass")
-            if st.button("Login", use_container_width=True, type="primary"):
-                try:
-                    supabase = get_supabase()
-                    res = supabase.auth.sign_in_with_password({
-                        "email": email,
-                        "password": password
-                    })
-                    st.session_state.user = res.user
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Login failed: {e}")
+            email = st.text_input("Email", key="login_email", placeholder="aapki@email.com")
+            password = st.text_input("Password", type="password", key="login_pass", placeholder="••••••••")
+
+            if st.button("Login", use_container_width=True, type="primary", key="login_btn"):
+                if not email or not password:
+                    st.warning("⚠️ Email aur password daalo!")
+                else:
+                    try:
+                        supabase = get_supabase()
+                        res = supabase.auth.sign_in_with_password({
+                            "email": email,
+                            "password": password
+                        })
+                        st.session_state.user = res.user
+                        st.rerun()
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "invalid" in err or "credentials" in err:
+                            st.error("❌ Email ya password galat hai!")
+                        elif "confirm" in err or "verified" in err:
+                            st.error("❌ Pehle email confirm karo — inbox check karo!")
+                        else:
+                            st.error(f"❌ Login failed: {e}")
+
+            # Forgot Password
+            with st.expander("🔑 Password bhool gaye?"):
+                reset_email = st.text_input("Apni email daalo", key="reset_email", placeholder="aapki@email.com")
+                if st.button("Reset Link Bhejo", use_container_width=True):
+                    if reset_email:
+                        try:
+                            supabase = get_supabase()
+                            supabase.auth.reset_password_email(reset_email)
+                            st.success("✅ Password reset link bhej diya — email check karo!")
+                        except Exception as e:
+                            st.error(f"❌ Error: {e}")
+                    else:
+                        st.warning("Email daalo!")
 
         with tab_register:
-            reg_email = st.text_input("Email", key="reg_email")
-            reg_password = st.text_input("Password", type="password", key="reg_pass")
-            if st.button("Register", use_container_width=True, type="primary"):
-                try:
-                    supabase = get_supabase()
-                    res = supabase.auth.sign_up({
-                        "email": reg_email,
-                        "password": reg_password
-                    })
-                    st.success("✅ Account ban gaya! Ab login karo.")
-                except Exception as e:
-                    st.error(f"❌ Register failed: {e}")
+            reg_email = st.text_input("Email", key="reg_email", placeholder="aapki@email.com")
+            reg_password = st.text_input("Password", type="password", key="reg_pass", placeholder="Min 6 characters")
+            reg_password2 = st.text_input("Password confirm karo", type="password", key="reg_pass2", placeholder="Dobara likho")
 
-    
+            if st.button("Register", use_container_width=True, type="primary", key="reg_btn"):
+                if not reg_email or not reg_password:
+                    st.warning("⚠️ Email aur password daalo!")
+                elif reg_password != reg_password2:
+                    st.error("❌ Passwords match nahi kar rahe!")
+                elif len(reg_password) < 6:
+                    st.error("❌ Password kam se kam 6 characters ka hona chahiye!")
+                else:
+                    try:
+                        supabase = get_supabase()
+                        res = supabase.auth.sign_up({
+                            "email": reg_email,
+                            "password": reg_password
+                        })
+                        if res.user:
+                            st.success("✅ Account ban gaya! Ab login karo.")
+                        else:
+                            st.warning("⚠️ Email confirm karo — inbox check karo!")
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "already" in err or "registered" in err:
+                            st.error("❌ Yeh email pehle se registered hai — login karo!")
+                        else:
+                            st.error(f"❌ Register failed: {e}")
 
 # ── Main App ──────────────────────────────────────────
 else:
@@ -158,8 +293,9 @@ else:
         st.markdown('<div class="big-title">🧠 AI Resume Screener Pro</div>', unsafe_allow_html=True)
         st.markdown('<div class="subtitle">Groq AI se multiple CVs analyze karo</div>', unsafe_allow_html=True)
     with col_user:
-        st.markdown(f"👤 **{user.email}**")
-        if st.button("Logout"):
+        st.markdown(f'<div class="user-badge">👤 {user.email}</div>', unsafe_allow_html=True)
+        if st.button("🚪 Logout"):
+            supabase.auth.sign_out()
             st.session_state.user = None
             st.rerun()
 
@@ -182,6 +318,7 @@ else:
             except:
                 saved_list = []
 
+            jd_text = ""
             if saved_list:
                 jd_options = ["-- Naya likho --"] + [j["title"] for j in saved_list]
                 selected_jd = st.selectbox("Saved JD select karo", jd_options)
@@ -325,7 +462,6 @@ else:
             if history.data:
                 for record in history.data:
                     verdict = record["verdict"]
-                    css = "suitable" if verdict == "SUITABLE" else ("maybe" if verdict == "MAYBE" else "nofit")
                     with st.expander(f"📄 {record['candidate_name']} — {record['score']}% — {verdict} | {record['created_at'][:10]}"):
                         st.markdown(f"**JD:** {record['job_description'][:200]}...")
                         c1, c2 = st.columns(2)
@@ -349,7 +485,6 @@ else:
     with tab3:
         st.subheader("💼 Saved Job Descriptions")
 
-        # Save new JD
         with st.expander("➕ Naya JD Save Karo"):
             jd_title = st.text_input("JD Title", placeholder="e.g. Python Developer, Data Analyst...")
             jd_desc = st.text_area("Job Description", height=200,
@@ -372,7 +507,6 @@ else:
 
         st.divider()
 
-        # Show saved JDs
         try:
             saved = supabase.table("saved_jds").select("*").eq("user_email", user.email).order("created_at", desc=True).execute()
             if saved.data:
