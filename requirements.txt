@@ -4,3 +4,7 @@ PyPDF2
 python-docx
 pandas
 supabase
+langchain
+langchain-groq
+langgraph
+smtplib2
