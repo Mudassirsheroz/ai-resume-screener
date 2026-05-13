@@ -5,9 +5,7 @@ import docx
 import json
 import pandas as pd
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 from supabase import create_client
 
 # ── Configuration ─────────────────────────────────────
@@ -16,7 +14,7 @@ SUPABASE_URL       = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY       = os.environ.get("SUPABASE_KEY")
 APP_URL            = os.environ.get("APP_URL", "http://localhost:8501")
 GMAIL_ADDRESS      = os.environ.get("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+RESEND_API_KEY     = os.environ.get("RESEND_API_KEY")
 
 @st.cache_resource
 def get_groq():
@@ -28,33 +26,34 @@ def get_supabase():
 
 # ── Email Agent ───────────────────────────────────────
 def send_email(to_email, candidate_name, verdict, score, strengths, summary):
-    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
-        return False
+    st.write(f"📧 Email bheja ja raha hai: {to_email}")
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Application Update — {candidate_name}"
-        msg["From"]    = GMAIL_ADDRESS
-        msg["To"]      = to_email
-        if verdict == "SUITABLE":
-            body = f"""Dear {candidate_name},
+        resend.api_key = RESEND_API_KEY
+        if not resend.api_key:
+            st.error("❌ RESEND_API_KEY nahi mili!")
+            return False
 
-We are pleased to inform you that after reviewing your application,
-you have been shortlisted for the next round!
+        if verdict == "SUITABLE":
+            subject = "Congratulations! You've been shortlisted"
+            body    = f"""Dear {candidate_name},
+
+We are pleased to inform you that you have been shortlisted!
 
 Match Score: {score}%
 
-Key Strengths we noticed:
+Key Strengths:
 {chr(10).join(f"• {s}" for s in strengths)}
 
-Summary:
-{summary}
+Summary: {summary}
 
-We will contact you shortly to schedule an interview.
+We will contact you shortly for an interview.
 
 Best regards,
 AI Hiring Team"""
+
         elif verdict == "MAYBE":
-            body = f"""Dear {candidate_name},
+            subject = "Application Update"
+            body    = f"""Dear {candidate_name},
 
 Thank you for applying. Your profile is under further review.
 
@@ -65,24 +64,30 @@ We will get back to you soon.
 
 Best regards,
 AI Hiring Team"""
+
         else:
-            body = f"""Dear {candidate_name},
+            subject = "Application Status Update"
+            body    = f"""Dear {candidate_name},
 
 Thank you for your interest. After careful review,
-we regret to inform you that your profile does not
-match our current requirements.
+your profile does not match our current requirements.
 
 We appreciate your time and wish you the best.
 
 Best regards,
 AI Hiring Team"""
-        msg.attach(MIMEText(body, "plain"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
+
+        resend.Emails.send({
+            "from":    "AI Hiring <onboarding@resend.dev>",
+            "to":      to_email,
+            "subject": subject,
+            "text":    body
+        })
+        st.success(f"✅ Email sent to {to_email}")
         return True
+
     except Exception as e:
-        st.warning(f"📧 Email not sent: {e}")
+        st.error(f"❌ Email error: {e}")
         return False
 
 # ── CV Text Extraction ────────────────────────────────
@@ -134,8 +139,8 @@ Respond ONLY in this exact JSON format with no extra text:
         temperature=0.1,
         max_tokens=1000
     )
-    raw = response.choices[0].message.content.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
+    raw   = response.choices[0].message.content.strip()
+    raw   = raw.replace("```json", "").replace("```", "").strip()
     start = raw.find("{")
     end   = raw.rfind("}") + 1
     return json.loads(raw[start:end])
@@ -167,19 +172,18 @@ Make final hiring recommendations. Respond ONLY in JSON with no extra text:
             temperature=0.1,
             max_tokens=800
         )
-        raw = response.choices[0].message.content.strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        raw   = response.choices[0].message.content.strip()
+        raw   = raw.replace("```json", "").replace("```", "").strip()
         start = raw.find("{")
         end   = raw.rfind("}") + 1
         return json.loads(raw[start:end])
     except:
-        # Fallback — agar JSON parse na ho
         return {
             "top_candidate": results[0]["name"] if results else "N/A",
             "recommended_for_interview": [r["name"] for r in results if r["verdict"] == "SUITABLE"],
-            "rejected": [r["name"] for r in results if r["verdict"] == "NOT SUITABLE"],
+            "rejected":      [r["name"] for r in results if r["verdict"] == "NOT SUITABLE"],
             "hiring_summary": "Agent completed screening. Please review results above.",
-            "next_steps": ["Review candidate rankings", "Schedule interviews", "Send offer letters"]
+            "next_steps":    ["Review candidate rankings", "Schedule interviews", "Send offer letters"]
         }
 
 # ── Page Configuration ────────────────────────────────
@@ -246,7 +250,7 @@ if st.session_state.user is None:
             supabase    = get_supabase()
             google_auth = supabase.auth.sign_in_with_oauth({
                 "provider": "google",
-                "options": {"redirect_to": APP_URL}
+                "options":  {"redirect_to": APP_URL}
             })
             st.markdown(f"""
             <a href="{google_auth.url}" class="google-btn">
@@ -388,7 +392,7 @@ else:
                         st.markdown(f'<div class="agent-thinking">💭 Reasoning: {result["reasoning"]}</div>', unsafe_allow_html=True)
 
                         if send_emails and result.get("candidate_email"):
-                            email_sent = send_email(
+                            send_email(
                                 result["candidate_email"],
                                 name,
                                 result["verdict"],
@@ -396,8 +400,6 @@ else:
                                 result["strengths"],
                                 result["summary"]
                             )
-                            if email_sent:
-                                st.markdown(f'<div class="agent-thinking">📧 Email sent to <b>{result["candidate_email"]}</b></div>', unsafe_allow_html=True)
 
                         try:
                             supabase.table("screenings").insert({
@@ -458,7 +460,7 @@ else:
                     "Candidate": [r["name"] for r in results],
                     "Score":     [r["score"] for r in results]
                 })
-                st.bar_chart(chart_data.set_index("Candidate")["Score"], color="#4A90D9", height=300)
+                st.bar_chart(chart_data.set_index("Candidate")["Score"], height=300)
 
                 st.subheader("📋 Detailed Analysis")
                 for i, res in enumerate(results):
