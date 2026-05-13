@@ -35,12 +35,10 @@ def send_email(to_email, candidate_name, verdict, score, strengths, summary):
         msg["Subject"] = f"Application Update — {candidate_name}"
         msg["From"]    = GMAIL_ADDRESS
         msg["To"]      = to_email
-
         if verdict == "SUITABLE":
-            body = f"""
-Dear {candidate_name},
+            body = f"""Dear {candidate_name},
 
-We are pleased to inform you that after reviewing your application, 
+We are pleased to inform you that after reviewing your application,
 you have been shortlisted for the next round!
 
 Match Score: {score}%
@@ -54,11 +52,9 @@ Summary:
 We will contact you shortly to schedule an interview.
 
 Best regards,
-AI Hiring Team
-            """
+AI Hiring Team"""
         elif verdict == "MAYBE":
-            body = f"""
-Dear {candidate_name},
+            body = f"""Dear {candidate_name},
 
 Thank you for applying. Your profile is under further review.
 
@@ -68,29 +64,25 @@ Summary: {summary}
 We will get back to you soon.
 
 Best regards,
-AI Hiring Team
-            """
+AI Hiring Team"""
         else:
-            body = f"""
-Dear {candidate_name},
+            body = f"""Dear {candidate_name},
 
-Thank you for your interest. After careful review, 
-we regret to inform you that your profile does not 
+Thank you for your interest. After careful review,
+we regret to inform you that your profile does not
 match our current requirements.
 
 We appreciate your time and wish you the best.
 
 Best regards,
-AI Hiring Team
-            """
-
+AI Hiring Team"""
         msg.attach(MIMEText(body, "plain"))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
             server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
         return True
     except Exception as e:
-        st.error(f"Email error: {e}")
+        st.warning(f"📧 Email not sent: {e}")
         return False
 
 # ── CV Text Extraction ────────────────────────────────
@@ -111,7 +103,6 @@ def read_cv(uploaded_file):
 
 # ── Screener Agent ────────────────────────────────────
 def screener_agent(cv_text, jd_text, candidate_name):
-    client = get_groq()
     prompt = f"""You are an autonomous AI Hiring Agent. Your job is to:
 1. Analyze the candidate CV against the Job Description
 2. Make a hiring decision
@@ -125,7 +116,7 @@ CANDIDATE: {candidate_name}
 CV:
 {cv_text}
 
-Respond ONLY in this exact JSON format:
+Respond ONLY in this exact JSON format with no extra text:
 {{
   "score": <integer 0-100>,
   "verdict": "<SUITABLE|MAYBE|NOT SUITABLE>",
@@ -137,23 +128,23 @@ Respond ONLY in this exact JSON format:
   "agent_action": "<what action the agent decided to take>",
   "reasoning": "<why agent made this decision>"
 }}"""
-
     response = get_groq().chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0.1,
         max_tokens=1000
     )
     raw = response.choices[0].message.content.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
+    start = raw.find("{")
+    end   = raw.rfind("}") + 1
+    return json.loads(raw[start:end])
 
 # ── Decision Agent ────────────────────────────────────
 def decision_agent(results):
     if not results:
         return None
-    client   = get_groq()
-    summary  = "\n".join([
+    summary = "\n".join([
         f"- {r['name']}: Score {r['score']}%, Verdict: {r['verdict']}"
         for r in results
     ])
@@ -161,24 +152,35 @@ def decision_agent(results):
 
 {summary}
 
-Make final hiring recommendations. Respond in JSON:
+Make final hiring recommendations. Respond ONLY in JSON with no extra text:
 {{
   "top_candidate": "<name>",
-  "recommended_for_interview": ["<name1>", "<name2>"],
+  "recommended_for_interview": ["<name1>"],
   "rejected": ["<name1>"],
   "hiring_summary": "<overall assessment in 2 sentences>",
   "next_steps": ["<step 1>", "<step 2>", "<step 3>"]
 }}"""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=800
-    )
-    raw = response.choices[0].message.content.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
+    try:
+        response = get_groq().chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=800
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        start = raw.find("{")
+        end   = raw.rfind("}") + 1
+        return json.loads(raw[start:end])
+    except:
+        # Fallback — agar JSON parse na ho
+        return {
+            "top_candidate": results[0]["name"] if results else "N/A",
+            "recommended_for_interview": [r["name"] for r in results if r["verdict"] == "SUITABLE"],
+            "rejected": [r["name"] for r in results if r["verdict"] == "NOT SUITABLE"],
+            "hiring_summary": "Agent completed screening. Please review results above.",
+            "next_steps": ["Review candidate rankings", "Schedule interviews", "Send offer letters"]
+        }
 
 # ── Page Configuration ────────────────────────────────
 st.set_page_config(
@@ -314,9 +316,6 @@ else:
 
     tab1, tab2, tab3 = st.tabs(["🤖 Agent Screening", "📋 History", "💼 Saved JDs"])
 
-    # ══════════════════════════════════════════════════
-    # TAB 1 — Agent Screening
-    # ══════════════════════════════════════════════════
     with tab1:
         col1, col2 = st.columns([1, 1], gap="large")
 
@@ -375,7 +374,6 @@ else:
                         (i + 1) / len(uploaded_files),
                         text=f"🤖 Agent analyzing: {uploaded.name}"
                     )
-
                     st.markdown(f'<div class="agent-thinking">🧠 Agent thinking... Reading CV: <b>{uploaded.name}</b></div>', unsafe_allow_html=True)
 
                     cv_text = read_cv(uploaded)
@@ -389,7 +387,6 @@ else:
                         st.markdown(f'<div class="agent-thinking">⚡ Agent decision for <b>{name}</b>: {result["verdict"]} ({result["score"]}%) — {result["agent_action"]}</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="agent-thinking">💭 Reasoning: {result["reasoning"]}</div>', unsafe_allow_html=True)
 
-                        # Email Agent
                         if send_emails and result.get("candidate_email"):
                             email_sent = send_email(
                                 result["candidate_email"],
@@ -400,9 +397,8 @@ else:
                                 result["summary"]
                             )
                             if email_sent:
-                                st.markdown(f'<div class="agent-thinking">📧 Email Agent: Email sent to <b>{result["candidate_email"]}</b></div>', unsafe_allow_html=True)
+                                st.markdown(f'<div class="agent-thinking">📧 Email sent to <b>{result["candidate_email"]}</b></div>', unsafe_allow_html=True)
 
-                        # Save to Supabase
                         try:
                             supabase.table("screenings").insert({
                                 "user_id":             user.id,
@@ -424,9 +420,7 @@ else:
 
                 progress.empty()
 
-                # Decision Agent
                 st.markdown('<div class="agent-box">🧠 <b>Decision Agent</b> — Making final hiring recommendations...</div>', unsafe_allow_html=True)
-
                 decision = decision_agent(results)
 
                 if decision:
@@ -486,9 +480,6 @@ else:
                         for q in res["interview_questions"]:
                             st.markdown(f"- {q}")
 
-    # ══════════════════════════════════════════════════
-    # TAB 2 — History
-    # ══════════════════════════════════════════════════
     with tab2:
         st.subheader("📋 Screening History")
         try:
@@ -517,9 +508,6 @@ else:
         except Exception as e:
             st.error(f"Failed to load history: {e}")
 
-    # ══════════════════════════════════════════════════
-    # TAB 3 — Saved JDs
-    # ══════════════════════════════════════════════════
     with tab3:
         st.subheader("💼 Saved Job Descriptions")
         with st.expander("➕ Save New JD"):
