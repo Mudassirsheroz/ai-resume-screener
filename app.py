@@ -5,13 +5,18 @@ import docx
 import json
 import pandas as pd
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from supabase import create_client
 
 # ── Configuration ─────────────────────────────────────
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-APP_URL       = os.environ.get("APP_URL", "http://localhost:8501")
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY")
+SUPABASE_URL       = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY       = os.environ.get("SUPABASE_KEY")
+APP_URL            = os.environ.get("APP_URL", "http://localhost:8501")
+GMAIL_ADDRESS      = os.environ.get("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
 @st.cache_resource
 def get_groq():
@@ -20,6 +25,73 @@ def get_groq():
 @st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ── Email Agent ───────────────────────────────────────
+def send_email(to_email, candidate_name, verdict, score, strengths, summary):
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Application Update — {candidate_name}"
+        msg["From"]    = GMAIL_ADDRESS
+        msg["To"]      = to_email
+
+        if verdict == "SUITABLE":
+            body = f"""
+Dear {candidate_name},
+
+We are pleased to inform you that after reviewing your application, 
+you have been shortlisted for the next round!
+
+Match Score: {score}%
+
+Key Strengths we noticed:
+{chr(10).join(f"• {s}" for s in strengths)}
+
+Summary:
+{summary}
+
+We will contact you shortly to schedule an interview.
+
+Best regards,
+AI Hiring Team
+            """
+        elif verdict == "MAYBE":
+            body = f"""
+Dear {candidate_name},
+
+Thank you for applying. Your profile is under further review.
+
+Match Score: {score}%
+Summary: {summary}
+
+We will get back to you soon.
+
+Best regards,
+AI Hiring Team
+            """
+        else:
+            body = f"""
+Dear {candidate_name},
+
+Thank you for your interest. After careful review, 
+we regret to inform you that your profile does not 
+match our current requirements.
+
+We appreciate your time and wish you the best.
+
+Best regards,
+AI Hiring Team
+            """
+
+        msg.attach(MIMEText(body, "plain"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
+        return True
+    except Exception as e:
+        st.error(f"Email error: {e}")
+        return False
 
 # ── CV Text Extraction ────────────────────────────────
 def extract_pdf(file):
@@ -37,11 +109,14 @@ def read_cv(uploaded_file):
         return extract_docx(uploaded_file)
     return uploaded_file.read().decode("utf-8")
 
-# ── AI Analysis ───────────────────────────────────────
-def analyze_with_groq(cv_text, jd_text, candidate_name):
+# ── Screener Agent ────────────────────────────────────
+def screener_agent(cv_text, jd_text, candidate_name):
     client = get_groq()
-    prompt = f"""You are a senior HR recruiter and talent acquisition specialist.
-Carefully analyze the candidate's CV against the provided Job Description.
+    prompt = f"""You are an autonomous AI Hiring Agent. Your job is to:
+1. Analyze the candidate CV against the Job Description
+2. Make a hiring decision
+3. Extract candidate email if present in CV
+4. Generate interview questions if suitable
 
 JOB DESCRIPTION:
 {jd_text}
@@ -50,17 +125,20 @@ CANDIDATE: {candidate_name}
 CV:
 {cv_text}
 
-Respond ONLY in this exact JSON format with no additional text:
+Respond ONLY in this exact JSON format:
 {{
   "score": <integer 0-100>,
   "verdict": "<SUITABLE|MAYBE|NOT SUITABLE>",
+  "candidate_email": "<email from CV or null>",
   "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
   "weaknesses": ["<weakness 1>", "<weakness 2>"],
-  "summary": "<A concise 2-sentence professional summary>",
-  "interview_questions": ["<question 1>", "<question 2>", "<question 3>"]
+  "summary": "<2 sentence professional summary>",
+  "interview_questions": ["<question 1>", "<question 2>", "<question 3>"],
+  "agent_action": "<what action the agent decided to take>",
+  "reasoning": "<why agent made this decision>"
 }}"""
 
-    response = client.chat.completions.create(
+    response = get_groq().chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
@@ -70,10 +148,42 @@ Respond ONLY in this exact JSON format with no additional text:
     raw = raw.replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
 
+# ── Decision Agent ────────────────────────────────────
+def decision_agent(results):
+    if not results:
+        return None
+    client   = get_groq()
+    summary  = "\n".join([
+        f"- {r['name']}: Score {r['score']}%, Verdict: {r['verdict']}"
+        for r in results
+    ])
+    prompt = f"""You are a senior HR Decision Agent. Based on these screening results:
+
+{summary}
+
+Make final hiring recommendations. Respond in JSON:
+{{
+  "top_candidate": "<name>",
+  "recommended_for_interview": ["<name1>", "<name2>"],
+  "rejected": ["<name1>"],
+  "hiring_summary": "<overall assessment in 2 sentences>",
+  "next_steps": ["<step 1>", "<step 2>", "<step 3>"]
+}}"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=800
+    )
+    raw = response.choices[0].message.content.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    return json.loads(raw)
+
 # ── Page Configuration ────────────────────────────────
 st.set_page_config(
-    page_title="AI Resume Screener Pro",
-    page_icon="🧠",
+    page_title="AI Resume Screener Agent",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -82,42 +192,20 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 * { font-family: 'Inter', sans-serif; }
-
 .big-title { font-size: 2rem; font-weight: 700; margin-bottom: 0.2rem; color: #1a1a2e; }
 .subtitle  { color: #6c757d; margin-bottom: 1.5rem; font-size: 1rem; }
-
-.score-card { padding: 1.4rem; border-radius: 14px; text-align: center; margin-bottom: 0.6rem; transition: transform 0.2s; }
-.score-card:hover { transform: translateY(-2px); }
+.agent-box { background: #f0f4ff; border: 2px solid #4A90D9; border-radius: 12px; padding: 1rem 1.4rem; margin: 0.5rem 0; }
+.agent-thinking { background: #fff8e1; border-left: 4px solid #ffc107; padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.4rem 0; font-size: 0.9rem; }
+.score-card { padding: 1.4rem; border-radius: 14px; text-align: center; margin-bottom: 0.6rem; }
 .suitable { background: #d4edda; border: 2px solid #28a745; }
 .maybe    { background: #fff3cd; border: 2px solid #ffc107; }
 .nofit    { background: #f8d7da; border: 2px solid #dc3545; }
-
-.login-container {
-    max-width: 440px; margin: 3rem auto; padding: 2.5rem;
-    border-radius: 20px; border: 1px solid #e8e8e8;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.10); background: white; text-align: center;
-}
-.login-logo     { font-size: 3.5rem; margin-bottom: 0.5rem; }
-.login-title    { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.3rem; color: #1a1a2e; }
-.login-subtitle { color: #888; margin-bottom: 2rem; font-size: 0.95rem; }
-
-.google-btn {
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    background: white; border: 1.5px solid #dadce0; border-radius: 10px;
-    padding: 12px 20px; font-size: 0.95rem; font-weight: 500; color: #3c4043;
-    cursor: pointer; width: 100%; transition: all 0.2s;
-    text-decoration: none; margin-bottom: 1rem;
-}
-.google-btn:hover { background: #f8f9fa; box-shadow: 0 2px 10px rgba(0,0,0,0.12); border-color: #bbb; }
-
+.decision-box { background: #e8f5e9; border: 2px solid #4CAF50; border-radius: 12px; padding: 1.2rem 1.5rem; margin: 1rem 0; }
+.user-badge { background: #f0f4ff; border: 1px solid #d0dbff; border-radius: 20px; padding: 6px 14px; font-size: 0.85rem; color: #3d5afe; font-weight: 500; display: inline-block; }
+.login-container { max-width: 440px; margin: 3rem auto; padding: 2.5rem; border-radius: 20px; border: 1px solid #e8e8e8; box-shadow: 0 8px 40px rgba(0,0,0,0.10); background: white; text-align: center; }
+.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; background: white; border: 1.5px solid #dadce0; border-radius: 10px; padding: 12px 20px; font-size: 0.95rem; font-weight: 500; color: #3c4043; cursor: pointer; width: 100%; transition: all 0.2s; text-decoration: none; margin-bottom: 1rem; }
 .divider { display: flex; align-items: center; gap: 12px; margin: 1.2rem 0; color: #aaa; font-size: 0.85rem; }
 .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #e8e8e8; }
-
-.user-badge {
-    background: #f0f4ff; border: 1px solid #d0dbff; border-radius: 20px;
-    padding: 6px 14px; font-size: 0.85rem; color: #3d5afe;
-    font-weight: 500; display: inline-block;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,18 +230,16 @@ if st.session_state.user is None:
 # LOGIN PAGE
 # ══════════════════════════════════════════════════════
 if st.session_state.user is None:
-
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
         st.markdown("""
         <div class="login-container">
-            <div class="login-logo">🧠</div>
-            <div class="login-title">AI Resume Screener Pro</div>
-            <div class="login-subtitle">Sign in to start screening candidates</div>
+            <div style="font-size:3.5rem">🤖</div>
+            <div style="font-size:1.8rem;font-weight:700;color:#1a1a2e">AI Resume Agent</div>
+            <div style="color:#888;margin-bottom:2rem">Sign in to start screening</div>
         </div>
         """, unsafe_allow_html=True)
 
-        # Google OAuth
         try:
             supabase    = get_supabase()
             google_auth = supabase.auth.sign_in_with_oauth({
@@ -179,12 +265,11 @@ if st.session_state.user is None:
         tab_login, tab_register = st.tabs(["Sign In", "Create Account"])
 
         with tab_login:
-            email    = st.text_input("Email Address", key="login_email", placeholder="you@example.com")
-            password = st.text_input("Password", type="password", key="login_pass", placeholder="••••••••")
-
+            email    = st.text_input("Email", key="login_email", placeholder="you@example.com")
+            password = st.text_input("Password", type="password", key="login_pass")
             if st.button("Sign In", use_container_width=True, type="primary"):
                 if not email or not password:
-                    st.warning("Please enter your email and password.")
+                    st.warning("Please enter email and password.")
                 else:
                     try:
                         supabase = get_supabase()
@@ -192,53 +277,22 @@ if st.session_state.user is None:
                         st.session_state.user = res.user
                         st.rerun()
                     except Exception as e:
-                        err = str(e).lower()
-                        if "invalid" in err or "credentials" in err:
-                            st.error("❌ Invalid email or password. Please try again.")
-                        elif "confirm" in err or "verified" in err:
-                            st.error("❌ Please verify your email address before signing in.")
-                        else:
-                            st.error(f"❌ Sign in failed: {e}")
-
-            with st.expander("Forgot your password?"):
-                reset_email = st.text_input("Enter your email address", key="reset_email", placeholder="you@example.com")
-                if st.button("Send Reset Link", use_container_width=True):
-                    if reset_email:
-                        try:
-                            supabase = get_supabase()
-                            supabase.auth.reset_password_email(reset_email)
-                            st.success("✅ Password reset link sent! Please check your inbox.")
-                        except Exception as e:
-                            st.error(f"❌ Error: {e}")
-                    else:
-                        st.warning("Please enter your email address.")
+                        st.error(f"❌ Sign in failed: {e}")
 
         with tab_register:
-            reg_email     = st.text_input("Email Address", key="reg_email", placeholder="you@example.com")
-            reg_password  = st.text_input("Password", type="password", key="reg_pass", placeholder="Minimum 6 characters")
-            reg_password2 = st.text_input("Confirm Password", type="password", key="reg_pass2", placeholder="Re-enter your password")
-
+            reg_email    = st.text_input("Email", key="reg_email", placeholder="you@example.com")
+            reg_password = st.text_input("Password", type="password", key="reg_pass")
+            reg_pass2    = st.text_input("Confirm Password", type="password", key="reg_pass2")
             if st.button("Create Account", use_container_width=True, type="primary"):
-                if not reg_email or not reg_password:
-                    st.warning("Please fill in all fields.")
-                elif reg_password != reg_password2:
+                if reg_password != reg_pass2:
                     st.error("❌ Passwords do not match.")
-                elif len(reg_password) < 6:
-                    st.error("❌ Password must be at least 6 characters.")
                 else:
                     try:
                         supabase = get_supabase()
                         res = supabase.auth.sign_up({"email": reg_email, "password": reg_password})
-                        if res.user:
-                            st.success("✅ Account created! Please verify your email before signing in.")
-                        else:
-                            st.warning("Please check your inbox to confirm your email.")
+                        st.success("✅ Account created! Please verify your email.")
                     except Exception as e:
-                        err = str(e).lower()
-                        if "already" in err or "registered" in err:
-                            st.error("❌ This email is already registered. Please sign in instead.")
-                        else:
-                            st.error(f"❌ Registration failed: {e}")
+                        st.error(f"❌ Registration failed: {e}")
 
 # ══════════════════════════════════════════════════════
 # MAIN APPLICATION
@@ -247,11 +301,10 @@ else:
     user     = st.session_state.user
     supabase = get_supabase()
 
-    # Header
     col_title, col_user = st.columns([3, 1])
     with col_title:
-        st.markdown('<div class="big-title">🧠 AI Resume Screener Pro</div>', unsafe_allow_html=True)
-        st.markdown('<div class="subtitle">Screen multiple candidates instantly using Groq AI</div>', unsafe_allow_html=True)
+        st.markdown('<div class="big-title">🤖 AI Resume Screening Agent</div>', unsafe_allow_html=True)
+        st.markdown('<div class="subtitle">Autonomous AI Agent — screens, decides, and emails candidates automatically</div>', unsafe_allow_html=True)
     with col_user:
         st.markdown(f'<div class="user-badge">👤 {user.email}</div>', unsafe_allow_html=True)
         if st.button("Sign Out"):
@@ -259,10 +312,10 @@ else:
             st.session_state.user = None
             st.rerun()
 
-    tab1, tab2, tab3 = st.tabs(["🚀 New Screening", "📋 History", "💼 Saved JDs"])
+    tab1, tab2, tab3 = st.tabs(["🤖 Agent Screening", "📋 History", "💼 Saved JDs"])
 
     # ══════════════════════════════════════════════════
-    # TAB 1 — New Screening
+    # TAB 1 — Agent Screening
     # ══════════════════════════════════════════════════
     with tab1:
         col1, col2 = st.columns([1, 1], gap="large")
@@ -278,72 +331,119 @@ else:
             jd_text = ""
             if saved_list:
                 jd_options  = ["-- Write a new JD --"] + [j["title"] for j in saved_list]
-                selected_jd = st.selectbox("Select a saved Job Description", jd_options)
+                selected_jd = st.selectbox("Select saved JD", jd_options)
                 if selected_jd != "-- Write a new JD --":
                     jd_text = next(j["description"] for j in saved_list if j["title"] == selected_jd)
-                    st.text_area("Job Description", value=jd_text, height=260, key="jd_display")
+                    st.text_area("Job Description", value=jd_text, height=250, key="jd_display")
                 else:
-                    jd_text = st.text_area("Paste your Job Description here", height=260,
-                        placeholder="e.g. We are looking for a Python Developer with experience in Django, REST APIs, and PostgreSQL...")
+                    jd_text = st.text_area("Paste Job Description", height=250)
             else:
-                jd_text = st.text_area("Paste your Job Description here", height=260,
-                    placeholder="e.g. We are looking for a Python Developer with experience in Django, REST APIs, and PostgreSQL...")
+                jd_text = st.text_area("Paste Job Description", height=250,
+                    placeholder="e.g. Python Developer needed with Django, REST APIs, 3+ years experience...")
 
         with col2:
-            st.subheader("📁 Upload Resumes")
+            st.subheader("📁 Upload CVs")
             uploaded_files = st.file_uploader(
-                "Upload multiple resumes (PDF, DOCX, or TXT)",
+                "Upload resumes (PDF, DOCX, TXT)",
                 type=["pdf", "docx", "txt"],
                 accept_multiple_files=True
             )
+            send_emails = st.toggle("📧 Auto-email candidates", value=False,
+                help="Agent will automatically email candidates based on verdict")
+            if send_emails:
+                st.info("📧 Agent will send emails automatically after screening!")
             if uploaded_files:
-                st.success(f"✅ {len(uploaded_files)} resume(s) ready for analysis")
+                st.success(f"✅ {len(uploaded_files)} CV(s) ready")
                 for f in uploaded_files:
                     st.caption(f"• {f.name}")
 
         st.divider()
 
-        if st.button("🚀 Analyze All Resumes", use_container_width=True, type="primary"):
+        if st.button("🤖 Launch Agent", use_container_width=True, type="primary"):
             if not jd_text.strip():
-                st.warning("⚠️ Please provide a Job Description before analyzing.")
+                st.warning("⚠️ Please provide a Job Description.")
             elif not uploaded_files:
-                st.warning("⚠️ Please upload at least one resume.")
+                st.warning("⚠️ Please upload at least one CV.")
             else:
+                st.markdown('<div class="agent-box">🤖 <b>Agent Activated</b> — Starting autonomous screening pipeline...</div>', unsafe_allow_html=True)
+
                 results  = []
-                progress = st.progress(0, text="Analyzing resumes with AI...")
+                progress = st.progress(0, text="Agent initializing...")
 
                 for i, uploaded in enumerate(uploaded_files):
                     progress.progress(
                         (i + 1) / len(uploaded_files),
-                        text=f"Analyzing: {uploaded.name} ({i+1}/{len(uploaded_files)})"
+                        text=f"🤖 Agent analyzing: {uploaded.name}"
                     )
+
+                    st.markdown(f'<div class="agent-thinking">🧠 Agent thinking... Reading CV: <b>{uploaded.name}</b></div>', unsafe_allow_html=True)
+
                     cv_text = read_cv(uploaded)
                     name    = uploaded.name.rsplit(".", 1)[0]
+
                     try:
-                        result         = analyze_with_groq(cv_text, jd_text, name)
+                        result         = screener_agent(cv_text, jd_text, name)
                         result["name"] = name
                         results.append(result)
 
-                        supabase.table("screenings").insert({
-                            "user_id":             user.id,
-                            "user_email":          user.email,
-                            "job_description":     jd_text[:500],
-                            "candidate_name":      name,
-                            "score":               result["score"],
-                            "verdict":             result["verdict"],
-                            "strengths":           result["strengths"],
-                            "weaknesses":          result["weaknesses"],
-                            "summary":             result["summary"],
-                            "interview_questions": result["interview_questions"]
-                        }).execute()
+                        st.markdown(f'<div class="agent-thinking">⚡ Agent decision for <b>{name}</b>: {result["verdict"]} ({result["score"]}%) — {result["agent_action"]}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="agent-thinking">💭 Reasoning: {result["reasoning"]}</div>', unsafe_allow_html=True)
+
+                        # Email Agent
+                        if send_emails and result.get("candidate_email"):
+                            email_sent = send_email(
+                                result["candidate_email"],
+                                name,
+                                result["verdict"],
+                                result["score"],
+                                result["strengths"],
+                                result["summary"]
+                            )
+                            if email_sent:
+                                st.markdown(f'<div class="agent-thinking">📧 Email Agent: Email sent to <b>{result["candidate_email"]}</b></div>', unsafe_allow_html=True)
+
+                        # Save to Supabase
+                        try:
+                            supabase.table("screenings").insert({
+                                "user_id":             user.id,
+                                "user_email":          user.email,
+                                "job_description":     jd_text[:500],
+                                "candidate_name":      name,
+                                "score":               result["score"],
+                                "verdict":             result["verdict"],
+                                "strengths":           result["strengths"],
+                                "weaknesses":          result["weaknesses"],
+                                "summary":             result["summary"],
+                                "interview_questions": result["interview_questions"]
+                            }).execute()
+                        except:
+                            pass
 
                     except Exception as e:
-                        st.error(f"❌ Failed to analyze {uploaded.name}: {e}")
+                        st.error(f"❌ Agent failed for {uploaded.name}: {e}")
 
                 progress.empty()
+
+                # Decision Agent
+                st.markdown('<div class="agent-box">🧠 <b>Decision Agent</b> — Making final hiring recommendations...</div>', unsafe_allow_html=True)
+
+                decision = decision_agent(results)
+
+                if decision:
+                    st.markdown(f"""
+<div class="decision-box">
+<h4>🤖 Agent Final Decision</h4>
+<b>Top Candidate:</b> {decision.get('top_candidate', 'N/A')}<br>
+<b>Recommended for Interview:</b> {', '.join(decision.get('recommended_for_interview', []))}<br>
+<b>Rejected:</b> {', '.join(decision.get('rejected', []))}<br><br>
+<b>Hiring Summary:</b> {decision.get('hiring_summary', '')}<br><br>
+<b>Next Steps:</b><br>
+{"".join(f"• {s}<br>" for s in decision.get('next_steps', []))}
+</div>""", unsafe_allow_html=True)
+
                 results.sort(key=lambda x: x["score"], reverse=True)
 
-                st.subheader("🏆 Candidate Rankings")
+                st.subheader("🏆 Agent Rankings")
                 num_cols = min(len(results), 4)
                 cols     = st.columns(num_cols)
                 for i, res in enumerate(results):
@@ -353,9 +453,9 @@ else:
                         medal   = "🥇" if i == 0 else ("🥈" if i == 1 else ("🥉" if i == 2 else "🎖️"))
                         st.markdown(f"""
 <div class="score-card {css}">
-  <div style="font-size:2.2rem;font-weight:700">{res["score"]}%</div>
-  <div style="font-size:1.05rem;font-weight:600;margin-top:4px">{medal} {res["name"]}</div>
-  <div style="font-size:0.82rem;margin-top:6px;opacity:0.85">{verdict}</div>
+  <div style="font-size:2rem;font-weight:700">{res["score"]}%</div>
+  <div style="font-size:1rem;font-weight:600">{medal} {res["name"]}</div>
+  <div style="font-size:0.82rem;opacity:0.85">{verdict}</div>
 </div>""", unsafe_allow_html=True)
 
                 st.divider()
@@ -364,54 +464,27 @@ else:
                     "Candidate": [r["name"] for r in results],
                     "Score":     [r["score"] for r in results]
                 })
-                st.bar_chart(chart_data.set_index("Candidate")["Score"], color="#4A90D9", height=350)
+                st.bar_chart(chart_data.set_index("Candidate")["Score"], color="#4A90D9", height=300)
 
-                col_a, col_b, col_c = st.columns(3)
-                col_a.metric("✅ Suitable",     sum(1 for r in results if r["verdict"] == "SUITABLE"))
-                col_b.metric("⚠️ Maybe",        sum(1 for r in results if r["verdict"] == "MAYBE"))
-                col_c.metric("❌ Not Suitable", sum(1 for r in results if r["verdict"] == "NOT SUITABLE"))
-
-                st.divider()
                 st.subheader("📋 Detailed Analysis")
                 for i, res in enumerate(results):
                     medal = "🥇" if i == 0 else ("🥈" if i == 1 else ("🥉" if i == 2 else "📄"))
-                    with st.expander(f"{medal} #{i+1} — {res['name']}  |  Score: {res['score']}%  |  {res['verdict']}"):
+                    with st.expander(f"{medal} {res['name']} | {res['score']}% | {res['verdict']}"):
                         c1, c2 = st.columns(2)
                         with c1:
-                            st.markdown("**✅ Key Strengths**")
+                            st.markdown("**✅ Strengths**")
                             for s in res["strengths"]:
                                 st.markdown(f"- {s}")
                         with c2:
-                            st.markdown("**⚠️ Areas for Improvement**")
+                            st.markdown("**⚠️ Weaknesses**")
                             for w in res["weaknesses"]:
                                 st.markdown(f"- {w}")
-                        st.markdown("**📝 AI Summary**")
                         st.info(res["summary"])
-                        st.markdown("**❓ Suggested Interview Questions**")
+                        if res.get("candidate_email"):
+                            st.markdown(f"**📧 Candidate Email:** {res['candidate_email']}")
+                        st.markdown("**❓ Interview Questions**")
                         for q in res["interview_questions"]:
                             st.markdown(f"- {q}")
-
-                st.divider()
-                report  = "AI RESUME SCREENER PRO — SCREENING REPORT\n"
-                report += "=" * 60 + "\n\n"
-                report += f"Job Description (excerpt):\n{jd_text[:400]}...\n\n"
-                report += "CANDIDATE RANKINGS:\n" + "-" * 40 + "\n"
-                for i, res in enumerate(results):
-                    report += f"\n#{i+1}  {res['name']}\n"
-                    report += f"    Score    : {res['score']}%\n"
-                    report += f"    Verdict  : {res['verdict']}\n"
-                    report += f"    Summary  : {res['summary']}\n"
-                    report += f"    Strengths    : {', '.join(res['strengths'])}\n"
-                    report += f"    Weaknesses   : {', '.join(res['weaknesses'])}\n"
-                    report += f"    Interview Qs : {', '.join(res['interview_questions'])}\n"
-
-                st.download_button(
-                    label="📥 Download Full Report",
-                    data=report,
-                    file_name="screening_report.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
 
     # ══════════════════════════════════════════════════
     # TAB 2 — History
@@ -424,13 +497,11 @@ else:
                 .eq("user_email", user.email) \
                 .order("created_at", desc=True) \
                 .execute()
-
             if history.data:
                 for record in history.data:
                     verdict = record["verdict"]
                     icon    = "✅" if verdict == "SUITABLE" else ("⚠️" if verdict == "MAYBE" else "❌")
-                    with st.expander(f"{icon}  {record['candidate_name']}  —  {record['score']}%  —  {verdict}  |  {record['created_at'][:10]}"):
-                        st.markdown(f"**Job Description (excerpt):** {record['job_description'][:200]}...")
+                    with st.expander(f"{icon} {record['candidate_name']} — {record['score']}% — {record['created_at'][:10]}"):
                         c1, c2 = st.columns(2)
                         with c1:
                             st.markdown("**✅ Strengths**")
@@ -442,7 +513,7 @@ else:
                                 st.markdown(f"- {w}")
                         st.info(record["summary"])
             else:
-                st.info("No screening history yet. Analyze your first resume to get started!")
+                st.info("No history yet!")
         except Exception as e:
             st.error(f"Failed to load history: {e}")
 
@@ -451,12 +522,10 @@ else:
     # ══════════════════════════════════════════════════
     with tab3:
         st.subheader("💼 Saved Job Descriptions")
-
-        with st.expander("➕ Save a New Job Description"):
-            jd_title = st.text_input("Job Title", placeholder="e.g. Senior Python Developer, Data Analyst...")
-            jd_desc  = st.text_area("Job Description", height=200,
-                placeholder="Paste the full job description here...")
-            if st.button("💾 Save Job Description", type="primary"):
+        with st.expander("➕ Save New JD"):
+            jd_title = st.text_input("Job Title", placeholder="e.g. Senior Python Developer")
+            jd_desc  = st.text_area("Job Description", height=200)
+            if st.button("💾 Save", type="primary"):
                 if jd_title.strip() and jd_desc.strip():
                     try:
                         supabase.table("saved_jds").insert({
@@ -465,31 +534,27 @@ else:
                             "title":       jd_title,
                             "description": jd_desc
                         }).execute()
-                        st.success(f"✅ '{jd_title}' saved successfully!")
+                        st.success(f"✅ '{jd_title}' saved!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to save: {e}")
+                        st.error(f"Failed: {e}")
                 else:
-                    st.warning("Please provide both a title and a description.")
-
+                    st.warning("Fill both fields.")
         st.divider()
-
         try:
             saved = supabase.table("saved_jds") \
                 .select("*") \
                 .eq("user_email", user.email) \
                 .order("created_at", desc=True) \
                 .execute()
-
             if saved.data:
                 for jd in saved.data:
-                    with st.expander(f"💼  {jd['title']}  —  Saved on {jd['created_at'][:10]}"):
-                        st.text_area("Content", value=jd["description"], height=160, key=f"jd_{jd['id']}")
+                    with st.expander(f"💼 {jd['title']} — {jd['created_at'][:10]}"):
+                        st.text_area("Content", value=jd["description"], height=150, key=f"jd_{jd['id']}")
                         if st.button("🗑️ Delete", key=f"del_{jd['id']}"):
                             supabase.table("saved_jds").delete().eq("id", jd["id"]).execute()
-                            st.success("Job description deleted.")
                             st.rerun()
             else:
-                st.info("No saved job descriptions yet. Add one above to reuse it later.")
+                st.info("No saved JDs yet!")
         except Exception as e:
-            st.error(f"Failed to load saved JDs: {e}")
+            st.error(f"Failed: {e}")
