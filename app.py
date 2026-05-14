@@ -5,7 +5,9 @@ import docx
 import json
 import pandas as pd
 import os
-import resend
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from supabase import create_client
 
 # ── Configuration ─────────────────────────────────────
@@ -14,7 +16,7 @@ SUPABASE_URL       = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY       = os.environ.get("SUPABASE_KEY")
 APP_URL            = os.environ.get("APP_URL", "http://localhost:8501")
 GMAIL_ADDRESS      = os.environ.get("GMAIL_ADDRESS")
-RESEND_API_KEY     = os.environ.get("RESEND_API_KEY")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
 @st.cache_resource
 def get_groq():
@@ -28,9 +30,11 @@ def get_supabase():
 def send_email(to_email, candidate_name, verdict, score, strengths, summary):
     st.write(f"📧 Email bheja ja raha hai: {to_email}")
     try:
-        resend.api_key = RESEND_API_KEY
-        if not resend.api_key:
-            st.error("❌ RESEND_API_KEY nahi mili!")
+        GMAIL      = os.environ.get("GMAIL_ADDRESS")
+        GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD")
+
+        if not GMAIL or not GMAIL_PASS:
+            st.error("❌ GMAIL_ADDRESS ya GMAIL_APP_PASSWORD secret nahi mili!")
             return False
 
         if verdict == "SUITABLE":
@@ -77,12 +81,18 @@ We appreciate your time and wish you the best.
 Best regards,
 AI Hiring Team"""
 
-        resend.Emails.send({
-            "from":    "AI Hiring <onboarding@resend.dev>",
-            "to":      to_email,
-            "subject": subject,
-            "text":    body
-        })
+        msg            = MIMEMultipart()
+        msg["From"]    = f"AI Hiring <{GMAIL}>"
+        msg["To"]      = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(GMAIL, GMAIL_PASS)
+        server.sendmail(GMAIL, to_email, msg.as_string())
+        server.quit()
+
         st.success(f"✅ Email sent to {to_email}")
         return True
 
@@ -186,7 +196,9 @@ Make final hiring recommendations. Respond ONLY in JSON with no extra text:
             "next_steps":    ["Review candidate rankings", "Schedule interviews", "Send offer letters"]
         }
 
-# ── Page Configuration ────────────────────────────────
+# ══════════════════════════════════════════════════════
+# PAGE CONFIG
+# ══════════════════════════════════════════════════════
 st.set_page_config(
     page_title="AI Resume Screener Agent",
     page_icon="🤖",
@@ -194,24 +206,308 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ══════════════════════════════════════════════════════
+# DARK & MODERN CSS
+# ══════════════════════════════════════════════════════
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
 * { font-family: 'Inter', sans-serif; }
-.big-title { font-size: 2rem; font-weight: 700; margin-bottom: 0.2rem; color: #1a1a2e; }
-.subtitle  { color: #6c757d; margin-bottom: 1.5rem; font-size: 1rem; }
-.agent-box { background: #f0f4ff; border: 2px solid #4A90D9; border-radius: 12px; padding: 1rem 1.4rem; margin: 0.5rem 0; }
-.agent-thinking { background: #fff8e1; border-left: 4px solid #ffc107; padding: 0.8rem 1rem; border-radius: 0 8px 8px 0; margin: 0.4rem 0; font-size: 0.9rem; }
-.score-card { padding: 1.4rem; border-radius: 14px; text-align: center; margin-bottom: 0.6rem; }
-.suitable { background: #d4edda; border: 2px solid #28a745; }
-.maybe    { background: #fff3cd; border: 2px solid #ffc107; }
-.nofit    { background: #f8d7da; border: 2px solid #dc3545; }
-.decision-box { background: #e8f5e9; border: 2px solid #4CAF50; border-radius: 12px; padding: 1.2rem 1.5rem; margin: 1rem 0; }
-.user-badge { background: #f0f4ff; border: 1px solid #d0dbff; border-radius: 20px; padding: 6px 14px; font-size: 0.85rem; color: #3d5afe; font-weight: 500; display: inline-block; }
-.login-container { max-width: 440px; margin: 3rem auto; padding: 2.5rem; border-radius: 20px; border: 1px solid #e8e8e8; box-shadow: 0 8px 40px rgba(0,0,0,0.10); background: white; text-align: center; }
-.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; background: white; border: 1.5px solid #dadce0; border-radius: 10px; padding: 12px 20px; font-size: 0.95rem; font-weight: 500; color: #3c4043; cursor: pointer; width: 100%; transition: all 0.2s; text-decoration: none; margin-bottom: 1rem; }
-.divider { display: flex; align-items: center; gap: 12px; margin: 1.2rem 0; color: #aaa; font-size: 0.85rem; }
-.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #e8e8e8; }
+
+/* ── Background ── */
+.stApp {
+    background-color: #0D0F18;
+    color: #E8EAF0;
+}
+
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {
+    background-color: #12141F;
+    border-right: 1px solid #1E2235;
+}
+
+/* ── Main block ── */
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    background-color: #12141F;
+    border-radius: 12px;
+    padding: 4px;
+    gap: 4px;
+    border: 1px solid #1E2235;
+}
+.stTabs [data-baseweb="tab"] {
+    background-color: transparent;
+    color: #8890A8;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 0.9rem;
+    padding: 8px 18px;
+    border: none;
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, #6C63FF, #3ECFCF) !important;
+    color: white !important;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    background: linear-gradient(135deg, #6C63FF, #3ECFCF);
+    color: white !important;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 24px;
+    font-weight: 600;
+    font-size: 0.92rem;
+    transition: all 0.25s ease;
+    box-shadow: 0 4px 15px rgba(108, 99, 255, 0.25);
+}
+.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 25px rgba(108, 99, 255, 0.45);
+}
+.stButton > button:active {
+    transform: translateY(0px);
+}
+
+/* ── Inputs ── */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea,
+.stSelectbox > div > div {
+    background-color: #12141F !important;
+    color: #E8EAF0 !important;
+    border: 1px solid #1E2235 !important;
+    border-radius: 10px !important;
+}
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: #6C63FF !important;
+    box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.2) !important;
+}
+
+/* ── File uploader ── */
+.stFileUploader > div {
+    background-color: #12141F;
+    border: 2px dashed #6C63FF;
+    border-radius: 14px;
+    padding: 12px;
+    transition: 0.3s;
+}
+.stFileUploader > div:hover {
+    border-color: #3ECFCF;
+    background-color: #15172A;
+}
+
+/* ── Expander ── */
+.streamlit-expanderHeader {
+    background-color: #12141F !important;
+    border: 1px solid #1E2235 !important;
+    border-radius: 10px !important;
+    color: #E8EAF0 !important;
+    font-weight: 500;
+}
+.streamlit-expanderContent {
+    background-color: #12141F !important;
+    border: 1px solid #1E2235 !important;
+    border-top: none !important;
+    border-radius: 0 0 10px 10px !important;
+}
+
+/* ── Alerts ── */
+.stSuccess {
+    background-color: #0A2A1E !important;
+    border-left: 4px solid #00C896 !important;
+    border-radius: 0 10px 10px 0 !important;
+    color: #6EFFD8 !important;
+}
+.stError {
+    background-color: #2A0A0A !important;
+    border-left: 4px solid #FF4B4B !important;
+    border-radius: 0 10px 10px 0 !important;
+}
+.stWarning {
+    background-color: #2A1F0A !important;
+    border-left: 4px solid #FFC107 !important;
+    border-radius: 0 10px 10px 0 !important;
+}
+.stInfo {
+    background-color: #0A1530 !important;
+    border-left: 4px solid #6C63FF !important;
+    border-radius: 0 10px 10px 0 !important;
+    color: #A8B4FF !important;
+}
+
+/* ── Toggle ── */
+.stToggle label { color: #E8EAF0 !important; }
+
+/* ── Progress bar ── */
+.stProgress > div > div {
+    background: linear-gradient(90deg, #6C63FF, #3ECFCF) !important;
+    border-radius: 10px;
+}
+.stProgress > div {
+    background-color: #1E2235 !important;
+    border-radius: 10px;
+}
+
+/* ── Divider ── */
+hr { border-color: #1E2235 !important; }
+
+/* ── Headings ── */
+h1, h2, h3, h4 { color: #E8EAF0 !important; }
+
+/* ── Bar chart ── */
+.stVegaLiteChart { background: #12141F !important; border-radius: 12px; }
+
+/* ── Dataframe ── */
+.stDataFrame { border-radius: 12px; overflow: hidden; border: 1px solid #1E2235; }
+
+/* ── Custom Components ── */
+.hero-header {
+    background: linear-gradient(135deg, #12141F 0%, #1A1D35 100%);
+    border: 1px solid #1E2235;
+    border-radius: 20px;
+    padding: 2rem 2.5rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+    overflow: hidden;
+}
+.hero-header::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 300px;
+    height: 300px;
+    background: radial-gradient(circle, rgba(108,99,255,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+}
+.hero-title {
+    font-size: 2.2rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #6C63FF, #3ECFCF);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0 0 6px;
+    line-height: 1.2;
+}
+.hero-sub {
+    color: #6A7290;
+    font-size: 1rem;
+    margin: 0;
+}
+.user-badge {
+    background: #12141F;
+    border: 1px solid #1E2235;
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    color: #A8B4FF;
+    font-weight: 500;
+    display: inline-block;
+}
+.agent-box {
+    background: linear-gradient(135deg, #13172E, #1A1D35);
+    border: 1px solid #6C63FF44;
+    border-left: 4px solid #6C63FF;
+    border-radius: 0 12px 12px 0;
+    padding: 1rem 1.4rem;
+    margin: 0.6rem 0;
+    color: #A8B4FF;
+    font-size: 0.92rem;
+}
+.agent-thinking {
+    background: #14120A;
+    border-left: 3px solid #FFC107;
+    padding: 0.7rem 1rem;
+    border-radius: 0 8px 8px 0;
+    margin: 0.4rem 0;
+    font-size: 0.87rem;
+    color: #D4B96A;
+}
+.score-card {
+    padding: 1.4rem;
+    border-radius: 16px;
+    text-align: center;
+    margin-bottom: 0.6rem;
+    transition: transform 0.2s;
+}
+.score-card:hover { transform: translateY(-3px); }
+.suitable {
+    background: linear-gradient(135deg, #0A2A1E, #0D3525);
+    border: 1px solid #00C89644;
+    box-shadow: 0 4px 20px rgba(0, 200, 150, 0.1);
+}
+.maybe {
+    background: linear-gradient(135deg, #2A1F0A, #352808);
+    border: 1px solid #FFC10744;
+    box-shadow: 0 4px 20px rgba(255, 193, 7, 0.1);
+}
+.nofit {
+    background: linear-gradient(135deg, #2A0A0A, #350D0D);
+    border: 1px solid #FF4B4B44;
+    box-shadow: 0 4px 20px rgba(255, 75, 75, 0.1);
+}
+.decision-box {
+    background: linear-gradient(135deg, #0A2A1E, #0D3525);
+    border: 1px solid #00C89644;
+    border-radius: 16px;
+    padding: 1.5rem 2rem;
+    margin: 1rem 0;
+    color: #E8EAF0;
+}
+.login-container {
+    max-width: 440px;
+    margin: 3rem auto;
+    padding: 2.5rem;
+    border-radius: 24px;
+    border: 1px solid #1E2235;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    background: #12141F;
+    text-align: center;
+}
+.google-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: #1A1D2E;
+    border: 1px solid #2A2D40;
+    border-radius: 12px;
+    padding: 12px 20px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #E8EAF0;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.2s;
+    text-decoration: none;
+    margin-bottom: 1rem;
+}
+.google-btn:hover {
+    background: #20243A;
+    border-color: #6C63FF;
+    color: #E8EAF0;
+}
+.divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 1.2rem 0;
+    color: #3A3F55;
+    font-size: 0.85rem;
+}
+.divider::before, .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #1E2235;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -240,9 +536,16 @@ if st.session_state.user is None:
     with col2:
         st.markdown("""
         <div class="login-container">
-            <div style="font-size:3.5rem">🤖</div>
-            <div style="font-size:1.8rem;font-weight:700;color:#1a1a2e">AI Resume Agent</div>
-            <div style="color:#888;margin-bottom:2rem">Sign in to start screening</div>
+            <div style="font-size:3.5rem; margin-bottom: 0.5rem;">🤖</div>
+            <div style="font-size:1.8rem; font-weight:800;
+                background: linear-gradient(135deg, #6C63FF, #3ECFCF);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;">
+                AI Resume Agent
+            </div>
+            <div style="color:#4A5070; margin-bottom:2rem; font-size:0.95rem;">
+                Sign in to start screening candidates
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -307,12 +610,18 @@ else:
     user     = st.session_state.user
     supabase = get_supabase()
 
+    # ── Hero Header ──
     col_title, col_user = st.columns([3, 1])
     with col_title:
-        st.markdown('<div class="big-title">🤖 AI Resume Screening Agent</div>', unsafe_allow_html=True)
-        st.markdown('<div class="subtitle">Autonomous AI Agent — screens, decides, and emails candidates automatically</div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div class="hero-header">
+            <div class="hero-title">🤖 AI Resume Screener</div>
+            <p class="hero-sub">Autonomous AI Agent — screens, decides & emails candidates automatically</p>
+        </div>
+        """, unsafe_allow_html=True)
     with col_user:
-        st.markdown(f'<div class="user-badge">👤 {user.email}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="user-badge" style="margin-top:1rem">👤 {user.email}</div>', unsafe_allow_html=True)
+        st.write("")
         if st.button("Sign Out"):
             supabase.auth.sign_out()
             st.session_state.user = None
@@ -362,7 +671,7 @@ else:
 
         st.divider()
 
-        if st.button("🤖 Launch Agent", use_container_width=True, type="primary"):
+        if st.button("🚀 Launch Agent", use_container_width=True, type="primary"):
             if not jd_text.strip():
                 st.warning("⚠️ Please provide a Job Description.")
             elif not uploaded_files:
@@ -428,13 +737,17 @@ else:
                 if decision:
                     st.markdown(f"""
 <div class="decision-box">
-<h4>🤖 Agent Final Decision</h4>
-<b>Top Candidate:</b> {decision.get('top_candidate', 'N/A')}<br>
-<b>Recommended for Interview:</b> {', '.join(decision.get('recommended_for_interview', []))}<br>
-<b>Rejected:</b> {', '.join(decision.get('rejected', []))}<br><br>
-<b>Hiring Summary:</b> {decision.get('hiring_summary', '')}<br><br>
-<b>Next Steps:</b><br>
-{"".join(f"• {s}<br>" for s in decision.get('next_steps', []))}
+<h4 style="margin-top:0; background: linear-gradient(135deg, #6C63FF, #3ECFCF);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+    🤖 Agent Final Decision
+</h4>
+<b style="color:#A8B4FF">Top Candidate:</b> <span style="color:#E8EAF0">{decision.get('top_candidate', 'N/A')}</span><br>
+<b style="color:#A8B4FF">Recommended for Interview:</b> <span style="color:#6EFFD8">{', '.join(decision.get('recommended_for_interview', []))}</span><br>
+<b style="color:#A8B4FF">Rejected:</b> <span style="color:#FF8080">{', '.join(decision.get('rejected', []))}</span><br><br>
+<b style="color:#A8B4FF">Hiring Summary:</b><br>
+<span style="color:#C8CADB">{decision.get('hiring_summary', '')}</span><br><br>
+<b style="color:#A8B4FF">Next Steps:</b><br>
+<span style="color:#C8CADB">{"".join(f"• {s}<br>" for s in decision.get('next_steps', []))}</span>
 </div>""", unsafe_allow_html=True)
 
                 results.sort(key=lambda x: x["score"], reverse=True)
@@ -447,11 +760,12 @@ else:
                         verdict = res["verdict"]
                         css     = "suitable" if verdict == "SUITABLE" else ("maybe" if verdict == "MAYBE" else "nofit")
                         medal   = "🥇" if i == 0 else ("🥈" if i == 1 else ("🥉" if i == 2 else "🎖️"))
+                        score_color = "#6EFFD8" if verdict == "SUITABLE" else ("#FFD97D" if verdict == "MAYBE" else "#FF8080")
                         st.markdown(f"""
 <div class="score-card {css}">
-  <div style="font-size:2rem;font-weight:700">{res["score"]}%</div>
-  <div style="font-size:1rem;font-weight:600">{medal} {res["name"]}</div>
-  <div style="font-size:0.82rem;opacity:0.85">{verdict}</div>
+  <div style="font-size:2.2rem; font-weight:800; color:{score_color}">{res["score"]}%</div>
+  <div style="font-size:1rem; font-weight:600; color:#E8EAF0; margin: 6px 0">{medal} {res["name"]}</div>
+  <div style="font-size:0.82rem; color:{score_color}; opacity:0.9; font-weight:500">{verdict}</div>
 </div>""", unsafe_allow_html=True)
 
                 st.divider()
