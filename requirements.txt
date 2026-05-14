@@ -7,4 +7,3 @@ supabase
 langchain
 langchain-groq
 langgraph
-resend
