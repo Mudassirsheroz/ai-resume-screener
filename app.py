@@ -5,6 +5,7 @@ import docx
 import json
 import pandas as pd
 import os
+import re
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -25,6 +26,13 @@ def get_groq():
 @st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ── Email Validator ───────────────────────────────────
+def is_valid_email(email):
+    if not email or email == "null":
+        return False
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, str(email).strip()))
 
 # ── Email Agent ───────────────────────────────────────
 def send_email(to_email, candidate_name, verdict, score, strengths, summary):
@@ -701,14 +709,18 @@ else:
                         st.markdown(f'<div class="agent-thinking">💭 Reasoning: {result["reasoning"]}</div>', unsafe_allow_html=True)
 
                         if send_emails and result.get("candidate_email"):
-                            send_email(
-                                result["candidate_email"],
-                                name,
-                                result["verdict"],
-                                result["score"],
-                                result["strengths"],
-                                result["summary"]
-                            )
+                            email_to_send = result["candidate_email"]
+                            if is_valid_email(email_to_send):
+                                send_email(
+                                    email_to_send,
+                                    name,
+                                    result["verdict"],
+                                    result["score"],
+                                    result["strengths"],
+                                    result["summary"]
+                                )
+                            else:
+                                st.warning(f"⚠️ Invalid email skip kiya: {email_to_send}")
 
                         try:
                             supabase.table("screenings").insert({
